@@ -1,7 +1,6 @@
 import argparse
 import os
 from x_file_parser import XFileParser
-from obj_importer import ObjImporter
 from x_file_writer import USDToXConverter
 from usd_exporter import USDExporter
 

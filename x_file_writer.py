@@ -135,17 +135,18 @@ class USDToXConverter:
 
         if mesh_data['name'].endswith('_001'):
             mesh_data['name'] = mesh_data['name'].removesuffix('_001')
-
-        # Transformation matrix for flipping X-axis
+        
         transform_matrix = np.array([
-            [-1.0,  0.0,  0.0,  0.0],
-            [ 0.0,  1.0,  0.0,  0.0],
+            [ 1.0,  0.0,  0.0,  0.0],
+            [ 0.0,  -1.0,  0.0,  0.0],
             [ 0.0,  0.0,  1.0,  0.0],
             [ 0.0,  0.0,  0.0,  1.0]
         ])
 
         # Extract vertices
-        base_vertices = [tuple(np.dot(transform_matrix, np.append(point, 1.0))[:3]) for point in usd_mesh.GetPointsAttr().Get()]
+        #base_vertices = [tuple(np.dot(transform_matrix, np.append(point, 1.0))[:3]) for point in usd_mesh.GetPointsAttr().Get()]
+        base_vertices = usd_mesh.GetPointsAttr().Get()
+        
         mesh_data['vertices'] = base_vertices
 
         # Extract normals and apply transformation
@@ -245,7 +246,18 @@ Header {
 
 """)
             self.write_materials(file)
-            self.write_frames(file, self.frames)
+
+            # Get the X File heirachy
+            json_hierarchy = None
+            if(os.path.exists(output_x_file.removesuffix('.x')+'_frames.json')):
+                with open(output_x_file.removesuffix('.x')+'_frames.json', 'r') as f:
+                    d = json.load(f)
+                    json_hierarchy = decode_json_to_frames(d)
+            else:
+                print("Error: missing - "+output_x_file.removesuffix('.x')+'_frames.json')
+                exit()
+
+            self.write_frames(file, json_hierarchy, self.frames)
 
     def write_materials(self, file):
         for material in self.materials:
@@ -257,41 +269,61 @@ Header {
             if material.texture_filename:
                 file.write("\tTextureFilename {"+"\n\t\t\""+material.texture_filename+"\";\n\t}\n")
             file.write("}\n\n")
-
-    def write_frames(self, file, frames, indent=0):
-        indent_str = '\t' * indent
+    
+    def find_frame_by_name_or_nickname(self, frames, name, nickname):
         for frame in frames:
-            #Skip excess frames
-            if frame['name'] == "Materials" or frame['name'] == "_materials" or frame['name'] == "Camera" or frame['name'] == 'Light':
-                continue
+            if frame['name'] == name or frame['name'] == nickname:
+                return frame
+        return None
 
-            if frame['name'] == "None":
-                frame['name'] = "Frame_World"
-                #fix for Blender's import/export, making it y-up and left handed
-                frame['transform_matrix'] = Gf.Matrix4d(1.000000,0.000000,0.000000,0.000000, 0.000000,1.000000,0.000000,0.000000, 0.000000,0.000000,1.000000,0.000000, 0.000000,0.000000,0.000000,1.000000)
-            file.write(f"{indent_str}Frame {frame['name']} {{\n")
-            if frame['transform_matrix']:
-                file.write(f"{indent_str}\tFrameTransformMatrix {{\n")
-
-                matrix = frame['transform_matrix']
-                row = matrix.GetRow(0)
-                file.write(f"{indent_str}\t\t{row[0]:0.6f},{row[1]:0.6f},{row[2]:0.6f},{row[3]:0.6f},\n")
-                row = matrix.GetRow(1)
-                file.write(f"{indent_str}\t\t{row[0]:0.6f},{row[1]:0.6f},{row[2]:0.6f},{row[3]:0.6f},\n")
-                row = matrix.GetRow(2)
-                file.write(f"{indent_str}\t\t{row[0]:0.6f},{row[1]:0.6f},{row[2]:0.6f},{row[3]:0.6f},\n")
-                row = matrix.GetRow(3)
-                file.write(f"{indent_str}\t\t{row[0]:0.6f},{row[1]:0.6f},{row[2]:0.6f},{row[3]:0.6f};;\n")
-
-                file.write(f"{indent_str}\t}}\n\n")
-            for mesh in frame['meshes']:
-                self.write_mesh(file, mesh, indent + 1)
-            self.write_frames(file, frame['frames'], indent + 1)
-            file.write(f"{indent_str}}}\n\n")
-
-    def write_mesh(self, file, mesh, indent):
+    def write_frames(self, file, json_frame, frames, indent=0):
+        # Normally, this would be printed with indent + 1 to get good formatting, but Recettear
+        # wants weird, not properly formatted .x files!
         indent_str = '\t' * indent
-        file.write(f"{indent_str}Mesh {mesh['name']} {{\n")
+
+        frame = self.find_frame_by_name_or_nickname(frames, json_frame.name, json_frame.nickname)
+        if not frame:
+            print(f"Frame not found for JSON Frame: {json_frame.name}/{json_frame.nickname}")  # Debug statement
+            exit
+            
+
+        if frame['name'] == "Frame_World":
+            #fix for Blender's import/export
+            frame['transform_matrix'] = Gf.Matrix4d(
+                1.000000, 0.000000, 0.000000, 0.000000, 
+                0.000000, 1.000000, 0.000000, 0.000000, 
+                0.000000, 0.000000, 1.000000, 0.000000, 
+                0.000000, 0.000000, 0.000000, 1.000000
+            )
+
+        file.write(f"{indent_str}Frame {json_frame.name} {{\n")
+        if frame['transform_matrix']:
+            file.write(f"{indent_str}\tFrameTransformMatrix {{\n")
+
+            matrix = frame['transform_matrix']
+            row = matrix.GetRow(0)
+            row1 = matrix.GetRow(1)
+            row2 = matrix.GetRow(2)
+            row3 = matrix.GetRow(3)
+
+            file.write(f"{indent_str}\t\t{row[0]:0.6f},{row[1]:0.6f},{row[2]:0.6f},{row[3]:0.6f},\n")
+            file.write(f"{indent_str}\t\t{row1[0]:0.6f},{row1[1]:0.6f},{row1[2]:0.6f},{row1[3]:0.6f},\n")
+            file.write(f"{indent_str}\t\t{row2[0]:0.6f},{row2[1]:0.6f},{row2[2]:0.6f},{row2[3]:0.6f},\n")
+            file.write(f"{indent_str}\t\t{row3[0]:0.6f},{row3[1]:0.6f},{row3[2]:0.6f},{row3[3]:0.6f};;\n")
+
+            file.write(f"{indent_str}\t}}\n\n")
+
+        for mesh in frame['meshes']:
+            self.write_mesh(file, mesh, json_frame.name.removeprefix("Frame_"), indent)
+
+        for child in json_frame.children:
+            self.write_frames(file, child, frame['frames'], indent)
+
+        file.write(f"{indent_str}}}\n\n")
+
+    def write_mesh(self, file, mesh, org_name, indent):
+        indent_str = '\t' * indent
+        file.write(f"{indent_str}Mesh {org_name} {{\n")
 
         # Vertices
         file.write(f"{indent_str}\t{len(mesh['vertices'])};\n")
@@ -366,6 +398,18 @@ Header {
 
         file.write(f"{indent_str}}}\n")
 
+class FrameJSON:
+    def __init__(self, name, nickname):
+        self.name = name
+        self.nickname = nickname
+        self.children = []
+
+def decode_json_to_frames(json_data):
+    def decode_frame(frame_dict):
+        frame = FrameJSON(frame_dict['name'], frame_dict['nickname'])
+        frame.children = [decode_frame(child) for child in frame_dict.get('children', [])]
+        return frame
+    return decode_frame(json_data)
 
 
 

@@ -1,4 +1,4 @@
-import re
+import re, json
 from collections import namedtuple, defaultdict
 
 print_debug = False
@@ -13,216 +13,252 @@ class XFileParser:
         self.frames = []
         self.materials = []
         self.animations = {}
+        self.json_root = None
+        self.frame_json = None
+        self.parent_frame_json = None
 
     def parse(self):
         with open(self.filename, 'r', encoding='shift_jis', errors='ignore') as file:
             lines = iter(file.readlines())
-            self.materials.extend(self.parse_materials(lines))
-            self.frames.append(self.parse_frame(lines))
+            self.parse_lines(lines)
 
-    def parse_materials(self, lines):
+    def parse_lines(self, lines):
+        
         materials_data = []
+        state = 'materials'
 
-        for line in lines:
-            line = line.split("//")[0] #ignore any comments
-            line = line.strip()
-
-            if line.startswith('Material '):
-                name = line.split()[1]
-                if print_debug: print(f"Material: {name}")
-
-                line = next(lines).strip()
-                properties = list(filter(None, line.split(';')))
-                face_color = tuple(map(float, properties[0:4]))
-
-                line = next(lines).strip()
-                properties = list(filter(None, line.split(';')))
-                power = float(properties[0])
-                
-                line = next(lines).strip()
-                properties = list(filter(None, line.split(';')))
-                specular_color = tuple(map(float, properties[0:4]))
-
-                line = next(lines).strip()
-                properties = list(filter(None, line.split(';')))
-                emissive_color = tuple(map(float, properties[0:4]))
-                
-                line = next(lines).strip()
-                texture_filename = None
-
-                if line.startswith('TextureFilename '):
-                    line = next(lines).strip()
-                    texture_filename = line.split('"')[1]
-                    line = next(lines).strip()
-                
-                materials_data.append(Material(name, face_color, power, specular_color, emissive_color, texture_filename))
-            elif line.startswith('Frame '):
-                return materials_data
-    
-
-    def parse_frame(self, lines):
         frame_data = {'name': None, 'transform_matrix': None, 'meshes': [], 'frames': []}
         current_frame = frame_data
+        frame_json = None
         frame_stack = []
         mesh_data = None
-        state = 'header'
 
         for line in lines:
             line = line.split("//")[0] #ignore any comments
             line = line.strip()
 
-            if line.startswith('Frame '):
-                frame_name = line.split()[1]
-                new_frame = {'name': frame_name, 'transform_matrix': None, 'meshes': [], 'frames': []}
-                current_frame['frames'].append(new_frame)
-                frame_stack.append(current_frame)
-                current_frame = new_frame
-                state = 'header'
-                if print_debug: print(f"Frame: {frame_name}")
-            
-            elif line.startswith('AnimationSet '):
-                print("Start animation")
-                self.parse_animation_set(lines, line)
+            if state == 'materials':
+                if line.startswith('Material '):
+                    name = line.split()[1]
+                    if print_debug: print(f"Material: {name}")
 
-            elif line.startswith('Mesh '):
-                mesh_name = line.split()[1]
-                mesh_data = {'name': mesh_name, 'vertices': [], 'normals': [], 'normal_faces': [], 'uvs': [], 'colors': [], 'faces': [], 'materials': {'material_indices': [], 'materials': []}}
-                current_frame['meshes'].append(mesh_data)
-                state = 'vertices_count'
-                if print_debug: print(f"Mesh: {mesh_name}")
-
-            elif line.startswith('FrameTransformMatrix'):
-                matrix_data = []
-                line = next(lines).strip()
-                while not line.endswith(';;'):
-                    matrix_data.append(line)
                     line = next(lines).strip()
-                matrix_data.append(line[:-2].strip())
-                current_frame['transform_matrix'] = ' '.join(matrix_data)
-                if print_debug: print(f"Transform Matrix: {current_frame['transform_matrix']}")
-                state = 'mesh'
-                continue
+                    properties = list(filter(None, line.split(';')))
+                    face_color = tuple(map(float, properties[0:4]))
 
-            elif state == 'vertices_count' and re.match(r'^\d+;$', line):
-                vertex_count = int(line[:-1])
-                state = 'vertices'
-                if print_debug: print(f"Vertices to process: {vertex_count}")
+                    line = next(lines).strip()
+                    properties = list(filter(None, line.split(';')))
+                    power = float(properties[0])
+                
+                    line = next(lines).strip()
+                    properties = list(filter(None, line.split(';')))
+                    specular_color = tuple(map(float, properties[0:4]))
 
-            elif state == 'vertices':
-                if line == '}':
-                    state = 'mesh'
-                    continue
-                vertices = line.split(';')[:-1]
-                if len(vertices) == 3:
-                    mesh_data['vertices'].append(tuple(map(float, vertices)))
-                if line.endswith(';;'):
-                    mesh_data['vertices'].append(tuple(map(float, vertices[:3])))
-                    state = 'faces_count'
+                    line = next(lines).strip()
+                    properties = list(filter(None, line.split(';')))
+                    emissive_color = tuple(map(float, properties[0:4]))
+                
+                    line = next(lines).strip()
+                    texture_filename = None
 
-            elif state == 'faces_count' and re.match(r'^\d+;$', line):
-                face_count = int(line[:-1])
-                state = 'faces'
-                if print_debug: print(f"Faces to process: {face_count}")
-                continue
+                    if line.startswith('TextureFilename '):
+                        line = next(lines).strip()
+                        texture_filename = line.split('"')[1]
+                        line = next(lines).strip()
+                
+                    materials_data.append(Material(name, face_color, power, specular_color, emissive_color, texture_filename))
+                elif line.startswith('Frame '):
+                    self.materials.extend(materials_data)
 
-            elif state == 'faces':
-                #face_data = re.findall(r'\d+', line)
-                face_data = line.split(';')[1]
-                face_data = face_data.split(',')
-                if face_data:
-                    mesh_data['faces'].append(list(map(int, face_data)))
-                if len(mesh_data['faces']) == face_count:
-                    state = 'mesh'
+                    #create the root frame
+                    frame_name = line.split()[1]
+                    current_frame['name'] = frame_name
 
-            elif state == 'mesh' and line.startswith('MeshMaterialList'):
-                mesh_data['materials'] = self.parse_material_list(lines)
-                if print_debug: print(f"Materials: {mesh_data['materials']}")
+                    frame_json = FrameJSON(frame_name)
+                    self.json_root = frame_json
+                    self.parent_frame_json = frame_json
 
-            elif state == 'mesh' and line.startswith('MeshNormals'):
-                state = 'normals_count'
+                    state = 'header'
 
-            elif state == 'normals_count' and re.match(r'^\d+;$', line):
-                normals_count = int(line[:-1])
-                state = 'normals'
-                if print_debug: print(f"Normals to process: {normals_count}")
+            else:
+                if line.startswith('Frame '):
+                    frame_name = line.split()[1]
+                    new_frame = {'name': frame_name, 'transform_matrix': None, 'meshes': [], 'frames': []}
+                    current_frame['frames'].append(new_frame)
+                    frame_stack.append(current_frame)
 
-            elif state == 'normals':
-                if line == '}':
-                    state = 'mesh'
-                    continue
-                normals = line.split(';')[:-1]
-                if len(normals) == 3:
-                    mesh_data['normals'].append(tuple(map(float, normals)))
-                if line.endswith(';;'):
-                    mesh_data['normals'].append(tuple(map(float, normals[:3])))
-                    state = 'normal_faces_count'
-                    #print(mesh_data['normals'])
-                    continue
+                    frame_json = FrameJSON(frame_name)
+                
+                    if self.parent_frame_json.name == current_frame["name"]:
+                        self.parent_frame_json.children.append(frame_json)
+                        frame_json.parent = self.parent_frame_json
+                    else:
+                        # Start a new parent structure
+                        self.parent_frame_json = self.parent_frame_json.children[-1]
 
-            elif state == 'normal_faces_count' and re.match(r'^\d+;$', line):
-                normal_face_count = int(line[:-1])
-                state = 'normal_faces'
-                if print_debug: print(f"Normal faces to process: {normal_face_count}")
-                continue
+                        frame_json.parent = self.parent_frame_json
+                        self.parent_frame_json.children.append(frame_json)
 
-            elif state == 'normal_faces':
-                if line == '}':
-                    state = 'mesh'
-                    continue
-                face_data = line.split(';')[1]
-                face_data = face_data.split(',')
-                if face_data:
-                    mesh_data['normal_faces'].append(list(map(int, face_data)))
+                    current_frame = new_frame
+                    state = 'header'
 
-            elif state == 'mesh' and line.startswith('MeshTextureCoords'):
-                state = 'uvs_count'
-
-            elif state == 'uvs_count' and re.match(r'^\d+;$', line):
-                uvs_count = int(line[:-1])
-                state = 'uvs'
-                if print_debug: print(f"UVs to process: {uvs_count}")
-
-            elif state == 'uvs':
-                if line == '}':
-                    state = 'mesh'
-                    continue
-                uvs = line.split(';')[:-1]
-                if len(uvs) == 2:
-                    mesh_data['uvs'].append(tuple(map(float, uvs)))
-                elif line.endswith(';;'):
-                    mesh_data['uvs'].append(tuple(map(float, uvs[:2])))
-
-            elif state == 'mesh' and line.startswith('MeshVertexColors'):
-                state = 'colors_count'
-
-            elif state == 'colors_count' and re.match(r'^\d+;$', line):
-                colors_count = int(line[:-1])
-                state = 'colors'
-                if print_debug: print(f"Vertex Colours to process: {colors_count}")
-
-            elif state == 'colors':
-                if line == '}':
-                    #print(mesh_data['colors'])
-                    state = 'mesh'
-                colors = list(filter(None, line.split(';')[1:]))
-                if len(colors) >= 3:
-                    colors = colors[:3]
-                    mesh_data['colors'].append(tuple(map(float, colors)))
-
-            elif line == '}':
-                if state == 'mesh':
-                    state = None
-                    continue
-                elif frame_stack:
-                    if print_debug: print(f"--- Frame finished: {current_frame['name']}")
-                    current_frame = frame_stack.pop()
-                elif state != 'header':
-                    if print_debug: print(f"--- process finished ---")
+                    if print_debug: print(f"Frame: {frame_name}")
             
-            
+                elif line.startswith('AnimationSet '):
+                    print("Start animation")
+                    self.parse_animation_set(lines, line)
 
+                elif line.startswith('Mesh '):
+                    mesh_name = line.split()[1]
+                    mesh_data = {'name': mesh_name, 'vertices': [], 'normals': [], 'normal_faces': [], 'uvs': [], 'colors': [], 'faces': [], 'materials': {'material_indices': [], 'materials': []}}
+                    current_frame['meshes'].append(mesh_data)
+                    state = 'vertices_count'
+                    if print_debug: print(f"Mesh: {mesh_name}")
 
-        return frame_data
+                elif line.startswith('FrameTransformMatrix'):
+                    matrix_data = []
+                    line = next(lines).strip()
+                    while not line.endswith(';;'):
+                        matrix_data.append(line)
+                        line = next(lines).strip()
+                    matrix_data.append(line[:-2].strip())
+                    current_frame['transform_matrix'] = ' '.join(matrix_data)
+                    if print_debug: print(f"Transform Matrix: {current_frame['transform_matrix']}")
+                    state = 'mesh'
+                    continue
+
+                elif state == 'vertices_count' and re.match(r'^\d+;$', line):
+                    vertex_count = int(line[:-1])
+                    state = 'vertices'
+                    if print_debug: print(f"Vertices to process: {vertex_count}")
+
+                elif state == 'vertices':
+                    if line == '}':
+                        state = 'mesh'
+                        continue
+                    vertices = line.split(';')[:-1]
+                    if len(vertices) == 3:
+                        mesh_data['vertices'].append(tuple(map(float, vertices)))
+                    if line.endswith(';;'):
+                        mesh_data['vertices'].append(tuple(map(float, vertices[:3])))
+                        state = 'faces_count'
+
+                elif state == 'faces_count' and re.match(r'^\d+;$', line):
+                    face_count = int(line[:-1])
+                    state = 'faces'
+                    if print_debug: print(f"Faces to process: {face_count}")
+                    continue
+
+                elif state == 'faces':
+                    #face_data = re.findall(r'\d+', line)
+                    face_data = line.split(';')[1]
+                    face_data = face_data.split(',')
+                    if face_data:
+                        mesh_data['faces'].append(list(map(int, face_data)))
+                    if len(mesh_data['faces']) == face_count:
+                        state = 'mesh'
+
+                elif state == 'mesh' and line.startswith('MeshMaterialList'):
+                    mesh_data['materials'] = self.parse_material_list(lines)
+                    if print_debug: print(f"Materials: {mesh_data['materials']}")
+
+                elif state == 'mesh' and line.startswith('MeshNormals'):
+                    state = 'normals_count'
+
+                elif state == 'normals_count' and re.match(r'^\d+;$', line):
+                    normals_count = int(line[:-1])
+                    state = 'normals'
+                    if print_debug: print(f"Normals to process: {normals_count}")
+
+                elif state == 'normals':
+                    if line == '}':
+                        state = 'mesh'
+                        continue
+                    normals = line.split(';')[:-1]
+                    if len(normals) == 3:
+                        mesh_data['normals'].append(tuple(map(float, normals)))
+                    if line.endswith(';;'):
+                        mesh_data['normals'].append(tuple(map(float, normals[:3])))
+                        state = 'normal_faces_count'
+                        #print(mesh_data['normals'])
+                        continue
+
+                elif state == 'normal_faces_count' and re.match(r'^\d+;$', line):
+                    normal_face_count = int(line[:-1])
+                    state = 'normal_faces'
+                    if print_debug: print(f"Normal faces to process: {normal_face_count}")
+                    continue
+
+                elif state == 'normal_faces':
+                    if line == '}':
+                        state = 'mesh'
+                        continue
+                    face_data = line.split(';')[1]
+                    face_data = face_data.split(',')
+                    if face_data:
+                        mesh_data['normal_faces'].append(list(map(int, face_data)))
+
+                elif state == 'mesh' and line.startswith('MeshTextureCoords'):
+                    state = 'uvs_count'
+
+                elif state == 'uvs_count' and re.match(r'^\d+;$', line):
+                    uvs_count = int(line[:-1])
+                    state = 'uvs'
+                    if print_debug: print(f"UVs to process: {uvs_count}")
+
+                elif state == 'uvs':
+                    if line == '}':
+                        state = 'mesh'
+                        continue
+                    uvs = line.split(';')[:-1]
+                    if len(uvs) == 2:
+                        mesh_data['uvs'].append(tuple(map(float, uvs)))
+                    elif line.endswith(';;'):
+                        mesh_data['uvs'].append(tuple(map(float, uvs[:2])))
+
+                elif state == 'mesh' and line.startswith('MeshVertexColors'):
+                    state = 'colors_count'
+
+                elif state == 'colors_count' and re.match(r'^\d+;$', line):
+                    colors_count = int(line[:-1])
+                    state = 'colors'
+                    if print_debug: print(f"Vertex Colours to process: {colors_count}")
+
+                elif state == 'colors':
+                    if line == '}':
+                        state = 'mesh'
+                    colors = list(filter(None, line.split(';')[1:]))
+                    if len(colors) >= 3:
+                        colors = colors[:3]
+                        mesh_data['colors'].append(tuple(map(float, colors)))
+
+                elif line == '}':
+                    if state == 'mesh':
+                        state = None
+
+                        continue
+                    elif frame_stack:
+                        if print_debug: print(f"--- Frame finished: {current_frame['name']}")
+                        current_frame = frame_stack.pop()
+
+                        if self.parent_frame_json.name != current_frame["name"]:
+                            print(f"--- json {self.parent_frame_json.name}")
+                            self.parent_frame_json = self.parent_frame_json.parent
+                        
+                    elif state != 'header':
+                        if print_debug: print(f"--- process finished ---")
+                        if self.json_root is not None:
+                            #print("tree is...")
+                            #print(self.json_root.toJSON())
+                            # The file is ready to write
+                            self.export_to_json(self.filename.removesuffix(".x")+"_frames.json")
+
+                            # record the frames
+                            self.frames.append(frame_data)
+
+    def export_to_json(self, output_json_file):
+        with open(output_json_file, 'w') as f:
+            f.write(self.json_root.toJSON())
 
     def parse_material_list(self, lines):
         material_data = {'material_indices': [], 'materials': []}
@@ -338,39 +374,61 @@ class XFileParser:
             
             stripped_line = next(lines)
 
-# To print parsed data for debugging
-def print_parsed_data(frames, materials, indent=0):
-    indent_str = '  ' * indent
-    for material in materials:
-        if material:
-            print(material)
-            print(f"Material: {material.name}")
-            print(f"{indent_str}  Face Color: {material.face_color}")
-            print(f"{indent_str}  Specular Color: {material.specular_color}")
-            print(f"{indent_str}  Emissive Color: {material.emissive_color}")
-            print(f"{indent_str}  Roughness: {material.power}")
-            if material.texture_filename:
-                print(f"{indent_str}  File: {material.texture_filename}")
+    # To print parsed data for debugging
+    def print_parsed_data(self, frames, materials, indent=0):
+        indent_str = '  ' * indent
+        for material in materials:
+            if material:
+                print(material)
+                print(f"Material: {material.name}")
+                print(f"{indent_str}  Face Color: {material.face_color}")
+                print(f"{indent_str}  Specular Color: {material.specular_color}")
+                print(f"{indent_str}  Emissive Color: {material.emissive_color}")
+                print(f"{indent_str}  Roughness: {material.power}")
+                if material.texture_filename:
+                    print(f"{indent_str}  File: {material.texture_filename}")
 
-    for frame in frames:
-        print(f"{indent_str}Frame: {frame['name']}")
-        if frame['transform_matrix']:
-            print(f"{indent_str}  Transform Matrix: {frame['transform_matrix']}")
-        for mesh in frame['meshes']:
-            print(f"{indent_str}  Mesh: {mesh['name']}")
-            print(f"{indent_str}    Vertices: {len(mesh['vertices'])}")
-            print(f"{indent_str}    Normals: {len(mesh['normals'])}")
-            print(f"{indent_str}    Face Normals: {len(mesh['normal_faces'])}")
-            print(f"{indent_str}    UVs: {len(mesh['uvs'])}")
-            print(f"{indent_str}    Colors: {len(mesh['colors'])}")
-            print(f"{indent_str}    Faces: {len(mesh['faces'])}")
-            print(f"{indent_str}    Material Indices: {len(mesh['materials']['material_indices'])}")
-            print(f"{indent_str}    Materials: {len(mesh['materials']['materials'])}")
-        if frame['frames']:
-            print_parsed_data(frame['frames'], [], indent + 1)
+        for frame in frames:
+            print(f"{indent_str}Frame: {frame['name']}")
+            if frame['transform_matrix']:
+                print(f"{indent_str}  Transform Matrix: {frame['transform_matrix']}")
+            for mesh in frame['meshes']:
+                print(f"{indent_str}  Mesh: {mesh['name']}")
+                print(f"{indent_str}    Vertices: {len(mesh['vertices'])}")
+                print(f"{indent_str}    Normals: {len(mesh['normals'])}")
+                print(f"{indent_str}    Face Normals: {len(mesh['normal_faces'])}")
+                print(f"{indent_str}    UVs: {len(mesh['uvs'])}")
+                print(f"{indent_str}    Colors: {len(mesh['colors'])}")
+                print(f"{indent_str}    Faces: {len(mesh['faces'])}")
+                print(f"{indent_str}    Material Indices: {len(mesh['materials']['material_indices'])}")
+                print(f"{indent_str}    Materials: {len(mesh['materials']['materials'])}")
+            if frame['frames']:
+                self.print_parsed_data(frame['frames'], [], indent + 1)
+
+class FrameJSON:
+    def __init__(self, name, parent=None):
+        self.name = name
+        self.nickname = name.removeprefix("Frame_")
+        self.parent = parent
+        self.children = []
+
+    def toJSON(self, indent=0):
+        toreturn = ("  "*indent)+"{\n"
+        toreturn += f'{("  "*indent)}  "name": "{self.name}",\n'
+        toreturn += f'{("  "*indent)}  "nickname": "{self.nickname}"'
+        if self.children and len(self.children) > 0:
+            toreturn += f',\n{("  "*indent)}  "children": ['
+            for child in self.children:
+                toreturn += "\n"+child.toJSON(indent+2)+','
+            toreturn = toreturn.removesuffix(',')
+            toreturn += f'\n{("  "*indent)}  ]\n'
+        else:
+            toreturn += '\n'
+        toreturn += ("  "*indent)+"}"
+        return toreturn
 
 if __name__ == "__main__":
     print_debug = True
     parser = XFileParser('train_iwa.x')
     parser.parse()
-    print_parsed_data(parser.frames, parser.materials)
+    parser.print_parsed_data(parser.frames, parser.materials)
