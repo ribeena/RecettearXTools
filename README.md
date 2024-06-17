@@ -39,11 +39,13 @@ You can also drag and drop .x or .usd files onto "Convert (drop file here).bat"
 When converting a .x file, it'll also create a `_speculars.json` file that stores specular
 colours - this is a limitation of Blender 4.1's USD importer/exporter, so it'll
 look up any specular colours for your frames/objects in there. Most files don't
-seem to use specular.
+seem to use specular colours however..
 
 It'll also create a `_frames.json` file - if you change the name of any objects in
 Blender, make sure to update this with the nickname. This file should be named
-the same as your .usd file when you convert to a .x.
+the same as your .usd file when you convert to a .x. You can also specify if the frames
+need collision detection or not, and it'll change the identing format - at this
+time I recommend pulling colliding items at the beginning of the world frame list.
 
 ## Blender tips
 
@@ -62,7 +64,7 @@ this process.
 
 ### Exporting USD
 
-When exporting choose the "None" object (frame) and right click and
+When exporting choose the "World Frame" object (frame) and right click and
 `select heirachy`, then in the export USD settings choose `selected`,
 and turn off embed textures.
 
@@ -89,10 +91,12 @@ Note: this will mess up your USD export! it's for preview purposes only!
 All the weird negative scaling etc means it's trial and error as to
 which shapes need their normals flipped in Blender.
 
-I recommend using Transform --> Apply Scale & Rotation, to limit the issues
+For "World Frame" it always seems to be scale -1,-1,-1, change to 1,1,-1.
+Then use `Transform --> Apply Scale`. likewise, I recommend using
+`Transform --> Apply Scale & Rotation` on the children, to limit the issues
 but this may set the objects in the wrong position.
 
-Don't forget in Viewport Shading mode, you can turn on "Backface Culling"
+Don't forget in Viewport Shading mode, you can turn on `Backface Culling`
 which should help get it right (provided you don't still have negative scales!).
 
 ## Preview .x files
@@ -105,7 +109,6 @@ and shows normals if there are any issues with your models.
 While this script does it best to parse the .x file, there's quite a few
 challenges, still not fully sorted.
 
-- normals aren't exactly the same resulting in darker areas than expected
 - vertex colours apply in a weird way, so are hard to preview in Blender
 - the World_Frame FrameTransformMatrix seems to invert the size of things
   - you'll need to compensate for that in Blender

@@ -77,7 +77,6 @@ class USDExporter:
     def process_frames(self, stage, frames, parent):
         for frame in frames:
             frame_name = frame['name']
-            print(frame_name)
             transform_matrix = frame['transform_matrix']
             meshes = frame['meshes']
 

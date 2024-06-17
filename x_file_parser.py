@@ -409,6 +409,7 @@ class FrameJSON:
     def __init__(self, name, parent=None):
         self.name = name
         self.nickname = name.removeprefix("Frame_")
+        self.collision = True
         self.parent = parent
         self.children = []
 
@@ -416,6 +417,7 @@ class FrameJSON:
         toreturn = ("  "*indent)+"{\n"
         toreturn += f'{("  "*indent)}  "name": "{self.name}",\n'
         toreturn += f'{("  "*indent)}  "nickname": "{self.nickname}"'
+        toreturn += f'{("  "*indent)}  "collision": "{self.collision}"'
         if self.children and len(self.children) > 0:
             toreturn += f',\n{("  "*indent)}  "children": ['
             for child in self.children:

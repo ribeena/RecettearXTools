@@ -103,12 +103,18 @@ class USDToXConverter:
         for child in root.GetChildren():
             self.parse_frame(child)
 
-        #remove excess root from Blender
-        if self.frames[0]['name'] == 'root':
+        #remove excess root objects from Blender
+        while self.frames[0]['name'] != 'Frame_World' and len(self.frames) > 0:
             self.frames = self.frames[0]['frames']
 
     def parse_frame(self, prim, parent=None):
-        frame_data = {'name': prim.GetName(), 'transform_matrix': None, 'meshes': [], 'frames': []}
+        frame_name = prim.GetName()
+        #remove .001 etc
+        if frame_name.startswith("Frame_World"):
+            frame_name = "Frame_World"
+
+        frame_data = {'name': frame_name, 'transform_matrix': None, 'meshes': [], 'frames': []}
+
         xformable = UsdGeom.Xformable(prim)
         if xformable:
             transform_attr = xformable.GetLocalTransformation()
@@ -139,7 +145,7 @@ class USDToXConverter:
         transform_matrix = np.array([
             [ 1.0,  0.0,  0.0,  0.0],
             [ 0.0,  -1.0,  0.0,  0.0],
-            [ 0.0,  0.0,  1.0,  0.0],
+            [ 0.0,  0.0,  -1.0,  0.0],
             [ 0.0,  0.0,  0.0,  1.0]
         ])
 
@@ -166,52 +172,71 @@ class USDToXConverter:
 
         # Extract UVs and remap vertices, normals, and colors
         primvar_api = UsdGeom.PrimvarsAPI(usd_mesh)
+
+        uvs = [(0.0, 0.0)] * len(base_vertices*2)
+        uv_indices = []
+
         if primvar_api.HasPrimvar("st"):
             uvs = primvar_api.GetPrimvar("st").Get()
             uv_indices = usd_mesh.GetFaceVertexIndicesAttr().Get()
 
-            new_vertices = []
-            new_normals = []
-            new_uvs = []
-            new_colors = []
-            vertex_map = {}
-            new_normal_faces = []
+        if uvs is None:
+            uvs = [(0.0, 0.0)] * len(base_vertices)
+            uv_indices = []
 
-            if primvar_api.HasPrimvar("displayColor"):
-                colors = primvar_api.GetPrimvar("displayColor").Get()
-            else:
-                colors = [(1.0, 1.0, 1.0)] * len(base_vertices)
+        new_vertices = []
+        new_normals = []
+        new_uvs = []
+        new_colors = []
+        vertex_map = {}
+        new_normal_faces = []
 
-            for face_index, face in enumerate(mesh_data['faces']):
-                new_normal_face = []
-                for i in range(3):
-                    vertex_index = face[i]
-                    uv_index = face_index * 3 + i  # Adjust index mapping here
-                    vertex = base_vertices[vertex_index]
-                    normal = base_normals[uv_index]
+        makingup = False
+        if primvar_api.HasPrimvar("displayColor"):
+            colors = primvar_api.GetPrimvar("displayColor").Get()
+        
+        if colors is None:
+            makingup = True
+            print(f"For: {mesh_data['name']}")
+            colors = [(1.0, 1.0, 1.0)] * len(base_vertices)
+
+        for face_index, face in enumerate(mesh_data['faces']):
+            new_normal_face = []
+            for i in range(3):
+                vertex_index = face[i]
+                uv_index = face_index * 3 + i  # Adjust index mapping here
+                vertex = base_vertices[vertex_index]
+                normal = base_normals[uv_index]
+
+                if uv_indices:
                     uv = uvs[uv_index]
-                    color = colors[vertex_index]
+                else:
+                    uv = (0.0, 0.0)
 
-                    key = (vertex, uv, color)
-                    if key in vertex_map:
-                        new_vertex_index = vertex_map[key]
-                    else:
-                        new_vertex_index = len(new_vertices)
-                        vertex_map[key] = new_vertex_index
-                        new_vertices.append(vertex)
-                        new_normals.append(normal)
-                        new_uvs.append(uv)
-                        new_colors.append(color)
+                if makingup:
+                    print(f"getting color {vertex_index}")
+                color = colors[vertex_index]
 
-                    face[i] = new_vertex_index
-                    new_normal_face.append(new_vertex_index)
-                new_normal_faces.append(new_normal_face)
+                key = (vertex, normal, uv, color)
+                if key in vertex_map:
+                    new_vertex_index = vertex_map[key]
+                else:
+                    new_vertex_index = len(new_vertices)
+                    vertex_map[key] = new_vertex_index
+                    new_vertices.append(vertex)
+                    new_normals.append(normal)
+                    new_uvs.append(uv)
+                    new_colors.append(color)
 
-            mesh_data['vertices'] = new_vertices
-            mesh_data['normals'] = [(norm[0], norm[1], norm[2]) for norm in new_normals]  # Ensure normals are in the correct order
-            mesh_data['uvs'] = [(uv[0], 1.0 - uv[1]) for uv in new_uvs]  # Correctly flip the V coordinate
-            mesh_data['colors'] = new_colors
-            mesh_data['normal_faces'] = new_normal_faces
+                face[i] = new_vertex_index
+                new_normal_face.append(new_vertex_index)
+            new_normal_faces.append(new_normal_face)
+
+        mesh_data['vertices'] = new_vertices
+        mesh_data['normals'] = [(norm[0], norm[1], norm[2]) for norm in new_normals]  # Ensure normals are in the correct order
+        mesh_data['uvs'] = [(uv[0], 1.0 - uv[1]) for uv in new_uvs]  # Correctly flip the V coordinate
+        mesh_data['colors'] = new_colors
+        mesh_data['normal_faces'] = new_normal_faces
 
         # Extract material groups using GeomSubset
         material_binding = UsdShade.MaterialBindingAPI(usd_mesh)
@@ -274,6 +299,9 @@ Header {
         for frame in frames:
             if frame['name'] == name or frame['name'] == nickname:
                 return frame
+            #Blender cloned object fix
+            if frame['name'].split("_00")[0] == name or frame['name'].split("_00")[0] == nickname:
+                return frame
         return None
 
     def write_frames(self, file, json_frame, frames, indent=0):
@@ -284,9 +312,8 @@ Header {
         frame = self.find_frame_by_name_or_nickname(frames, json_frame.name, json_frame.nickname)
         if not frame:
             print(f"Frame not found for JSON Frame: {json_frame.name}/{json_frame.nickname}")  # Debug statement
-            exit
+            return
             
-
         if frame['name'] == "Frame_World":
             #fix for Blender's import/export
             frame['transform_matrix'] = Gf.Matrix4d(
@@ -312,6 +339,13 @@ Header {
             file.write(f"{indent_str}\t\t{row3[0]:0.6f},{row3[1]:0.6f},{row3[2]:0.6f},{row3[3]:0.6f};;\n")
 
             file.write(f"{indent_str}\t}}\n\n")
+
+
+        print(f"JSON Frame: {json_frame.name}/{json_frame.nickname} is {json_frame.collision}")  # Debug statement
+
+        # If specified to indent files correctly, do so
+        if json_frame.collision == "False":
+            indent += 1
 
         for mesh in frame['meshes']:
             self.write_mesh(file, mesh, json_frame.name.removeprefix("Frame_"), indent)
@@ -365,18 +399,21 @@ Header {
 
         file.write(indent_str + "\t}\n\n")
 
+        print(f"{indent_str}Mesh {org_name} {{\n")
         # Normals
-        file.write(f"{indent_str}\tMeshNormals {{\n")
-        file.write(f"{indent_str}\t\t{len(mesh['normals'])};\n")
-        for normal in mesh['normals'][:-1]:
-            file.write(f"{indent_str}\t\t{normal[0]:0.6f},{normal[1]:0.6f},{normal[2]:0.6f};,\n")
-        file.write(f"{indent_str}\t\t{mesh['normals'][-1][0]:0.6f},{mesh['normals'][-1][1]:0.6f},{mesh['normals'][-1][2]:0.6f};;\n\n")
+        if len(mesh['normals']) > 0:
+            file.write(f"{indent_str}\tMeshNormals {{\n")
+            file.write(f"{indent_str}\t\t{len(mesh['normals'])};\n")
+            print(f"{indent_str}\t\t{len(mesh['normals'])};\n")
+            for normal in mesh['normals'][:-1]:
+                file.write(f"{indent_str}\t\t{normal[0]:0.6f},{normal[1]:0.6f},{normal[2]:0.6f};,\n")
+            file.write(f"{indent_str}\t\t{mesh['normals'][-1][0]:0.6f},{mesh['normals'][-1][1]:0.6f},{mesh['normals'][-1][2]:0.6f};;\n\n")
 
-        file.write(f"{indent_str}\t\t{len(mesh['normal_faces'])};\n")
-        for face in mesh['normal_faces'][:-1]:
-            file.write(f"{indent_str}\t\t3;{face[0]},{face[1]},{face[2]};,\n")
-        file.write(f"{indent_str}\t\t3;{mesh['normal_faces'][-1][0]},{mesh['normal_faces'][-1][1]},{mesh['normal_faces'][-1][2]};;\n")
-        file.write(f"{indent_str}\t}}\n\n")
+            file.write(f"{indent_str}\t\t{len(mesh['normal_faces'])};\n")
+            for face in mesh['normal_faces'][:-1]:
+                file.write(f"{indent_str}\t\t3;{face[0]},{face[1]},{face[2]};,\n")
+            file.write(f"{indent_str}\t\t3;{mesh['normal_faces'][-1][0]},{mesh['normal_faces'][-1][1]},{mesh['normal_faces'][-1][2]};;\n")
+            file.write(f"{indent_str}\t}}\n\n")
 
         # Vertex Colors
         if mesh['colors']:
@@ -402,11 +439,14 @@ class FrameJSON:
     def __init__(self, name, nickname):
         self.name = name
         self.nickname = nickname
+        self.collision = True
         self.children = []
 
 def decode_json_to_frames(json_data):
     def decode_frame(frame_dict):
         frame = FrameJSON(frame_dict['name'], frame_dict['nickname'])
+        if 'collision' in frame_dict:
+            frame.collision = frame_dict['collision']
         frame.children = [decode_frame(child) for child in frame_dict.get('children', [])]
         return frame
     return decode_frame(json_data)
